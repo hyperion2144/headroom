@@ -14,7 +14,9 @@ import time
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
+from headroom.proxy.handlers.openai import _header_get, _normalize_origin
 from headroom.proxy.stage_timer import StageTimer, emit_stage_timings_log
 
 if TYPE_CHECKING:
@@ -36,6 +38,35 @@ from headroom.proxy.memory_query import MemoryQuery
 from headroom.proxy.outcome import RequestOutcome
 
 logger = logging.getLogger("headroom.proxy")
+
+
+_ANTHROPIC_BASE_URL_HEADER = "x-headroom-base-url"
+
+
+def _resolve_anthropic_upstream_base(request_headers: dict[str, str]) -> str | None:
+    """Resolve the upstream base URL from the ``x-headroom-base-url`` header.
+
+    Mirrors ``_resolve_openai_upstream_base`` (``openai.py:113-123``): performs
+    a case-insensitive header lookup, normalizes the value to an origin URL
+    (stripping any path/query/fragment, validating scheme + hostname), then
+    narrows the allowed schemes to ``http`` / ``https`` (the OpenAI variant
+    also accepts ``ws`` / ``wss``; Anthropic providers speak HTTP only).
+
+    Returns:
+        Normalized origin URL (e.g. ``"https://api.minimaxi.com"``), or
+        ``None`` when the header is absent, empty, malformed, or uses a
+        non-HTTP scheme.
+    """
+    raw_base_url = _header_get(request_headers, _ANTHROPIC_BASE_URL_HEADER)
+    if raw_base_url is None:
+        return None
+
+    normalized = _normalize_origin(raw_base_url)
+    if normalized is None:
+        return None
+    if urlparse(normalized).scheme not in {"http", "https"}:
+        return None
+    return normalized
 
 
 class AnthropicHandlerMixin:
