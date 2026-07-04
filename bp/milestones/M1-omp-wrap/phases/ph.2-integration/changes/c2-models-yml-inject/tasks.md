@@ -28,7 +28,7 @@ mapping file. No side effects beyond a single JSON write. Independently testable
 before any inject/restore integration.
 -->
 
-- [ ] task-c2-1: [type:behavior] Add upstream-mapping path helper, builder, and writer
+- [x] task-c2-1: [type:behavior] Add upstream-mapping path helper, builder, and writer <!-- commit: 6b8c3c9a -->
   - **description**: In `headroom/providers/omp/config.py`, add `import json` (and `import click`, `import filecmp` for later waves). Add three new functions:
     - `omp_upstream_map_path() -> Path` — returns `<cwd>/.omp/.headroom-upstreams.json`. Mirrors the `omp_mcp_config_path()` project-local pattern.
     - `_build_upstream_map(models_yml_data: dict) -> dict[str, str]` — iterate `data["providers"]` (a dict); for each provider that is a dict and carries a truthy `_headroom_original_baseUrl`, walk its `models` list. For each model entry that is a dict with an `id` (or a bare string id), map `id → _headroom_original_baseUrl`. Skip wildcard ids (`"*"`), skip providers without a stored original, skip non-dict providers, skip empty/missing `providers`. Return `{}` when nothing maps.
@@ -57,7 +57,7 @@ Wires Wave 1 into inject_omp_proxy_config and fixes the re-wrap bug where the
 true original baseUrl was being overwritten by the proxy URL on a second wrap.
 -->
 
-- [ ] task-c2-2: [type:behavior] Generate upstream map during inject and fix baseUrl idempotency
+- [x] task-c2-2: [type:behavior] Generate upstream map during inject and fix baseUrl idempotency <!-- commit: d61df459 -->
   - **description**: In `headroom/providers/omp/config.py`:
     - **Fix `_modify_provider_base_urls`**: remove the dead `provider_config.get("_original_baseUrl", original_url)` probe line. Before overwriting `baseUrl`, check `provider_config.get("_headroom_original_baseUrl")`; if already present and truthy, treat *that* as the true original (do not re-capture the current `baseUrl`, which on a re-wrap is the proxy URL). If absent, capture the current `baseUrl` as the original. Always set `baseUrl = f"http://127.0.0.1:{proxy_port}"` and (re)write `_headroom_original_baseUrl = str(original_url)`. Return the modified count as before.
     - **Extend `inject_omp_proxy_config`**: after the modified YAML is written to `models.yml`, call `_build_upstream_map(data)` on the in-memory modified `data` and `_write_upstream_map(mapping)` to persist `.omp/.headroom-upstreams.json`. This must run inside the existing `if modified_count:` block so an empty providers dict does not write an empty map. Leave the existing `.omp/config.yml` marker-block logic untouched.
@@ -85,7 +85,7 @@ Completes the round-trip: restore warns before clobbering user edits and removes
 the upstream map written by Wave 2.
 -->
 
-- [ ] task-c2-3: [type:behavior] Warn on backup divergence and clean up the upstream map on restore
+- [x] task-c2-3: [type:behavior] Warn on backup divergence and clean up the upstream map on restore <!-- commit: 505403aa -->
   - **description**: In `headroom/providers/omp/config.py`, extend `restore_omp_models_yml`:
     - **Divergence warning**: in the backup-exists branch, *before* `shutil.copy2(backup_file, config_file)`, compare the live `config_file` against `backup_file` with `filecmp.cmp(config_file, backup_file, shallow=False)`. If they differ and `config_file` exists, emit a non-blocking warning to stderr via `click.echo(..., err=True)` naming both paths and noting that local edits will be overwritten. Do not raise — restore proceeds. (Add `import filecmp` and `import click` at the top of the module; both are already stdlib/dependency-present — opencode's config.py imports `click`.)
     - **Mapping cleanup**: after a successful restore-from-backup *and* after the strip-markers branch, delete `.omp/.headroom-upstreams.json` (via `omp_upstream_map_path()`) if it exists. Use `try/except OSError` to swallow a missing-file race. The noop branch (no backup, no markers) must NOT delete the mapping — a noop means nothing was wrapped.
@@ -111,8 +111,8 @@ the upstream map written by Wave 2.
 
 ## Verification
 
-- [ ] `python -c "import headroom.providers.omp.config"` imports cleanly (no syntax/import errors)
-- [ ] `ruff check headroom/providers/omp/config.py headroom/providers/omp/__init__.py` passes (no new lint errors)
-- [ ] New unit tests (task-c2-1/2/3 RED tests) pass with `pytest`
-- [ ] Re-wrap idempotency: inject twice → `_headroom_original_baseUrl` holds the true upstream (manual or test-asserted)
-- [ ] Each wave's acceptance criteria confirmed
+- [x] `python -c "import headroom.providers.omp.config"` imports cleanly (no syntax/import errors)
+- [x] `ruff check headroom/providers/omp/config.py headroom/providers/omp/__init__.py` passes (no new lint errors)
+- [x] New unit tests (task-c2-1/2/3 RED tests) pass with `pytest`
+- [x] Re-wrap idempotency: inject twice → `_headroom_original_baseUrl` holds the true upstream (manual or test-asserted)
+- [x] Each wave's acceptance criteria confirmed
