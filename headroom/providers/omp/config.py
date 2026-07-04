@@ -141,22 +141,34 @@ def _modify_provider_base_urls(
 ) -> int:
     """Rewrite ``baseUrl`` in each provider to point at the local proxy.
 
+    Idempotent across re-wraps: if a provider already carries a truthy
+    ``_headroom_original_baseUrl`` (i.e. it was wrapped previously), that
+    value is preserved as the true original. The current ``baseUrl`` — which
+    on a re-wrap is the proxy URL from the previous inject — is *not*
+    captured as the original on a subsequent wrap.
+
     Returns the count of modified providers.
     """
     modified = 0
-    for provider_name, provider_config in providers.items():
+    proxy_url = f"http://127.0.0.1:{proxy_port}"
+    for provider_config in providers.values():
         if not isinstance(provider_config, dict):
             continue
         if "baseUrl" not in provider_config:
             continue
-        original_url = provider_config.pop("baseUrl", None)
-        # Preserve the original upstream as a comment-encoded header so the
-        # proxy can route to it (x-headroom-base-url pattern).
-        provider_config["baseUrl"] = f"http://127.0.0.1:{proxy_port}"
-        # Store the original upstream URL so the proxy can forward there.
-        provider_config.get("_original_baseUrl", original_url)  # probe only
-        # Store original for unwrap to restore. Use a field that starts with
-        # underscore so it doesn't interfere with OMP's normal parsing.
+        # Preserve the true original across re-wraps: on a fresh wrap the
+        # current baseUrl is the real upstream; on a re-wrap it is the proxy
+        # URL from the previous inject — ignore that and keep the stored
+        # true upstream.
+        existing_original = provider_config.get("_headroom_original_baseUrl")
+        if existing_original:
+            original_url = existing_original
+        else:
+            original_url = provider_config.get("baseUrl")
+        # Always (re)point the provider at the proxy.
+        provider_config["baseUrl"] = proxy_url
+        # Persist the true upstream under an underscore-prefixed field so it
+        # is ignored by OMP but available to the proxy router and unwrap.
         provider_config["_headroom_original_baseUrl"] = str(original_url) if original_url else ""
         modified += 1
     return modified
@@ -185,7 +197,9 @@ def inject_omp_proxy_config(port: int) -> None:
 
     1. Snapshot ``models.yml`` before modification.
     2. Parse ``models.yml``, rewrite every provider's ``baseUrl`` to the proxy.
-    3. Write the Headroom marker block into project ``.omp/config.yml``.
+    3. Write the modified ``models.yml``.
+    4. Build & persist the upstream mapping (``.omp/.headroom-upstreams.json``).
+    5. Write the Headroom marker block into project ``.omp/config.yml``.
     """
     config_file, backup_file = omp_config_paths()
     snapshot_omp_models_if_unwrapped(config_file, backup_file)
@@ -213,6 +227,13 @@ def inject_omp_proxy_config(port: int) -> None:
                 f"# Modified by Headroom — provider traffic routed through proxy\n{_yaml_data}",
                 encoding="utf-8",
             )
+            # Build & persist the upstream mapping. ``_modify_provider_base_urls``
+            # already populated ``_headroom_original_baseUrl`` on every touched
+            # provider, so the builder sees a stable view. ``_write_upstream_map``
+            # is called inside this block so an empty providers dict (zero
+            # modifications) never produces a stale mapping file on disk.
+            mapping = _build_upstream_map(data)
+            _write_upstream_map(mapping)
 
     # Write marker block into project .omp/config.yml
     project_config_path = Path.cwd() / ".omp" / "config.yml"
