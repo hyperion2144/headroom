@@ -25,6 +25,7 @@ from .install import (
     get_all_registrars,
     install_everywhere,
 )
+from .omp import OmpRegistrar
 from .opencode import OpencodeRegistrar
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "ClaudeRegistrar",
     "CodexRegistrar",
     "MCPRegistrar",
+    "OmpRegistrar",
     "OpencodeRegistrar",
     "RegisterResult",
     "RegisterStatus",

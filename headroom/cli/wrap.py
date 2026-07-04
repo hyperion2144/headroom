@@ -126,6 +126,16 @@ from headroom.providers.opencode.config import (
     snapshot_opencode_config_if_unwrapped,
     strip_opencode_headroom_blocks,
 )
+from headroom.providers.omp import (
+    _CONFIG_MARKER_END,  # noqa: F401
+    _CONFIG_MARKER_START,  # noqa: F401
+    inject_omp_proxy_config,
+    omp_config_paths,
+    restore_omp_models_yml,
+    snapshot_omp_models_if_unwrapped,
+    strip_omp_headroom_blocks,
+)
+from headroom.providers.omp.runtime import build_launch_env as _build_omp_launch_env
 from headroom.proxy.project_context import with_project_prefix as _with_project_prefix
 
 from .main import main
@@ -5599,6 +5609,54 @@ def opencode(
     )
 
 
+# =============================================================================
+# OMP (Oh My Pi)
+# =============================================================================
+
+
+@wrap.command(context_settings={"ignore_unknown_options": True})
+@click.option(
+    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
+)
+@click.option("--no-mcp", is_flag=True, help="Skip headroom MCP server registration")
+@click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.option("--prepare-only", is_flag=True, hidden=True)
+@click.argument("omp_args", nargs=-1, type=click.UNPROCESSED)
+def omp(
+    port: int,
+    no_mcp: bool,
+    no_proxy: bool,
+    verbose: bool,
+    prepare_only: bool,
+    omp_args: tuple,
+) -> None:
+    """Launch OMP (Oh My Pi) through Headroom proxy.
+
+    \b
+    Starts the Headroom proxy, injects provider configuration into
+    OMP's ``.omp/`` project config, and launches the ``omp`` CLI
+    with all API traffic routed through Headroom for compression.
+
+    \b
+    Examples:
+        headroom wrap omp                           # Start proxy + configure + launch
+        headroom wrap omp -- "write code"            # Pass prompt to OMP
+        headroom wrap omp --port 9999                # Custom proxy port
+        headroom wrap omp --no-mcp                   # Skip MCP retrieve tool registration
+        headroom wrap omp --prepare-only              # Only configure, don't start
+
+    \b
+    NOT YET FULLY IMPLEMENTED. The command registers as a stub in ph.1;
+    full wrap/unwrap workflow is implemented in ph.2-integration.
+    """
+    raise NotImplementedError(
+        "`headroom wrap omp` is not yet fully implemented. "
+        "The full implementation will be available in ph.2-integration. "
+        "Use `headroom wrap` with other agents (opencode, claude, codex) in the meantime."
+    )
+
+
 def _opencode_home_dir() -> Path:
     """Return the OpenCode home/config directory."""
     env_path = os.environ.get("OPENCODE_HOME", "").strip()
@@ -5688,6 +5746,36 @@ def unwrap_opencode(port: int, no_stop_proxy: bool) -> None:
     if not no_stop_proxy and status != "noop":
         _echo_unwrap_proxy_stop_status(_stop_local_proxy_for_unwrap(port), port)
     click.echo()
+
+
+# =============================================================================
+# OMP (unwrap)
+# =============================================================================
+
+
+@unwrap.command("omp")
+@click.option(
+    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
+)
+@click.option("--no-stop-proxy", is_flag=True, help="Do not stop the local Headroom proxy")
+def unwrap_omp(port: int, no_stop_proxy: bool) -> None:
+    """Undo ``headroom wrap omp`` edits to OMP configuration files.
+
+    \b
+    Behaviour:
+
+    * If a pre-wrap backup of ``models.yml`` exists, restore it.
+    * Otherwise, if the file contains Headroom marker blocks, strip them.
+    * Remove Headroom MCP server from ``.omp/mcp.json``.
+    * Stop the local Headroom proxy (unless ``--no-stop-proxy``).
+
+    \b
+    NOT YET FULLY IMPLEMENTED. Full unwrap implementation in ph.2-integration.
+    """
+    raise NotImplementedError(
+        "`headroom unwrap omp` is not yet fully implemented. "
+        "The full implementation will be available in ph.2-integration."
+    )
 
 
 @unwrap.command("openclaw")
