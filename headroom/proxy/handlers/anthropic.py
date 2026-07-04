@@ -515,6 +515,25 @@ class AnthropicHandlerMixin:
         request.state.auth_mode = auth_mode
         logger.debug(f"[{request_id}] auth_mode_classified mode={auth_mode.value}")
 
+        # c3-proxy-extensions (task-c3-2): resolve upstream base URL from the
+        # ``x-headroom-base-url`` request header when no explicit
+        # ``upstream_base_url`` parameter was supplied by the route caller.
+        # OmpUpstreamRouterTransform (added in task-c3-5) injects this header
+        # per-request based on a model→upstream mapping, enabling per-model
+        # upstream routing for OMP-wrapped providers. The header is honored
+        # only when ``upstream_base_url`` is None — explicit route-level
+        # overrides (e.g. Bedrock variants) keep their existing precedence.
+        # Non-OMP requests don't carry the header, so the resolver returns
+        # None and ``upstream_base_url`` stays None → behavior is identical
+        # to pre-change (falls back to ``self.ANTHROPIC_API_URL``).
+        if upstream_base_url is None:
+            upstream_base_url = _resolve_anthropic_upstream_base(dict(request.headers))
+            if upstream_base_url is not None:
+                logger.debug(
+                    f"[{request_id}] anthropic_upstream_resolved_from_header "
+                    f"upstream={upstream_base_url}"
+                )
+
         # Unit 2: per-stage timings for the pre-upstream phase. The
         # finalizer emits one structured log line + Prometheus
         # observations even if the handler raises.
