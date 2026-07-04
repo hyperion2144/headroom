@@ -5636,9 +5636,10 @@ def omp(
     """Launch OMP (Oh My Pi) through Headroom proxy.
 
     \b
-    Starts the Headroom proxy, injects provider configuration into
-    OMP's ``.omp/`` project config, and launches the ``omp`` CLI
-    with all API traffic routed through Headroom for compression.
+    Starts the Headroom proxy, registers the headroom MCP server in
+    OMP's project-local ``.omp/mcp.json``, exports ``HEADROOM_PROXY_URL``
+    to the launch environment, and runs the ``omp`` CLI with all API
+    traffic routed through Headroom for compression.
 
     \b
     Examples:
@@ -5647,15 +5648,33 @@ def omp(
         headroom wrap omp --port 9999                # Custom proxy port
         headroom wrap omp --no-mcp                   # Skip MCP retrieve tool registration
         headroom wrap omp --prepare-only              # Only configure, don't start
-
-    \b
-    NOT YET FULLY IMPLEMENTED. The command registers as a stub in ph.1;
-    full wrap/unwrap workflow is implemented in ph.2-integration.
     """
-    raise NotImplementedError(
-        "`headroom wrap omp` is not yet fully implemented. "
-        "The full implementation will be available in ph.2-integration. "
-        "Use `headroom wrap` with other agents (opencode, claude, codex) in the meantime."
+    from headroom.mcp_registry import OmpRegistrar
+    from headroom.providers.omp.runtime import build_launch_env
+
+    if shutil.which("omp") is None:
+        raise click.ClickException(
+            f"OMP CLI 'omp' not found in PATH. Install OMP: {_OMP_INSTALL_URL}"
+        )
+
+    if not no_mcp:
+        _setup_headroom_mcp(OmpRegistrar(), port, verbose=verbose, force=True)
+
+    env, env_vars_display = build_launch_env(port, os.environ)
+
+    if prepare_only:
+        click.echo("  OMP preparation complete (proxy not started, omp not launched).")
+        return
+
+    _launch_tool(
+        binary="omp",
+        args=omp_args,
+        env=env,
+        port=port,
+        no_proxy=no_proxy,
+        tool_label="OMP",
+        env_vars_display=env_vars_display,
+        agent_type="omp",
     )
 
 
