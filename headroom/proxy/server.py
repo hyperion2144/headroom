@@ -784,6 +784,20 @@ class HeadroomProxy(
 
             _intercept_prefix = [ToolResultInterceptorTransform()]
 
+        # c3-proxy-extensions (task-c3-4): OMP per-request upstream router.
+        # When `headroom wrap omp` launches the proxy, it sets
+        # HEADROOM_OMP_UPSTREAM_MAP to the per-model upstream mapping file.
+        # The transform reads it once at startup and injects
+        # `x-headroom-base-url` per request so OMP-wrapped providers route to
+        # their original upstreams. Stored on `self` so `create_app` can wire
+        # it as FastAPI HTTP middleware later; `None` when the env var is
+        # unset → zero overhead, no middleware registered.
+        self._omp_router_transform: object | None = None
+        if os.environ.get("HEADROOM_OMP_UPSTREAM_MAP"):
+            from headroom.proxy.transforms.omp_router import OmpUpstreamRouterTransform
+
+            self._omp_router_transform = OmpUpstreamRouterTransform()
+
         self.anthropic_pipeline = TransformPipeline(
             transforms=[*_intercept_prefix, cache_aligner, anthropic_router],
             provider=self.anthropic_provider,
@@ -2705,6 +2719,24 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         except Exception:
             logger.debug("admin audit emission failed", exc_info=True)
         return response
+
+    # c3-proxy-extensions (task-c3-4): OMP per-request upstream router
+    # middleware. Registered AFTER `_record_headroom_stack` and
+    # `_security_gate` so it runs INNERMOST — Starlette executes middleware
+    # in reverse-registration order, so the last `@app.middleware("http")`
+    # runs closest to the handler. Placement after the security gate means
+    # the security gate logs the original inbound headers (no injected
+    # `x-headroom-base-url` polluting telemetry) and the handler still sees
+    # the injected header on its first `request.headers.get(...)` call.
+    # Only registered when HEADROOM_OMP_UPSTREAM_MAP was set at startup —
+    # otherwise `proxy._omp_router_transform` is None and there is zero
+    # per-request overhead.
+    if proxy._omp_router_transform is not None:
+        _omp_router_transform = proxy._omp_router_transform
+
+        @app.middleware("http")
+        async def _omp_upstream_router(request, call_next):
+            return await _omp_router_transform(request, call_next)
 
     # Third-party proxy extensions (Enterprise, custom plugins). Discovered via
     # the `headroom.proxy_extension` entry-point group, but **opt-in only**:
