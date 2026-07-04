@@ -6,10 +6,14 @@ adapted for OMP's YAML config files and project-level ``.omp/mcp.json``.
 
 from __future__ import annotations
 
+import filecmp
+import json
 import os
 import re
 import shutil
 from pathlib import Path
+
+import click
 
 try:
     import yaml as _yaml
@@ -23,6 +27,11 @@ except ImportError:
 # ---------------------------------------------------------------------------
 _CONFIG_MARKER_START = "# --- Headroom proxy config ---"
 _CONFIG_MARKER_END = "# --- end Headroom ---"
+
+# Environment variable the proxy reads to locate the upstream mapping file
+# produced by ``inject_omp_proxy_config``. Keep in sync with c1/wrap.py which
+# sets this when launching the proxy.
+_HEADROOM_UPSTREAM_MAP_ENV = "HEADROOM_OMP_UPSTREAM_MAP"
 
 # Regex to strip the Headroom marker block (inclusive of both markers).
 _CONFIG_BLOCK_RE = re.compile(
@@ -56,6 +65,16 @@ def omp_models_yml_path() -> Path:
 def omp_mcp_config_path() -> Path:
     """Return ``<cwd>/.omp/mcp.json`` (project-local MCP config)."""
     return Path.cwd() / ".omp" / "mcp.json"
+
+
+def omp_upstream_map_path() -> Path:
+    """Return ``<cwd>/.omp/.headroom-upstreams.json`` (project-local mapping).
+
+    This file is the contract between ``inject_omp_proxy_config`` (producer)
+    and the c3 ``OmpUpstreamRouterTransform`` (consumer): every concrete model
+    id is mapped to the upstream ``baseUrl`` it should be routed to.
+    """
+    return Path.cwd() / ".omp" / ".headroom-upstreams.json"
 
 
 def omp_config_paths() -> tuple[Path, Path]:
@@ -211,6 +230,70 @@ def inject_omp_proxy_config(port: int) -> None:
                 f"{_CONFIG_MARKER_END}\n"
             )
             project_config_path.write_text(existing.rstrip() + marker_block, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Upstream mapping — build & write ``.omp/.headroom-upstreams.json``
+# ---------------------------------------------------------------------------
+
+
+def _build_upstream_map(models_yml_data: dict) -> dict[str, str]:
+    """Build ``{model_id: original_baseUrl}`` from parsed ``models.yml`` data.
+
+    Iterates ``data["providers"]``; for each provider that is a dict and carries
+    a truthy ``_headroom_original_baseUrl`` (i.e. was touched by
+    ``_modify_provider_base_urls``), walks the provider's ``models`` list. Each
+    model id — whether it appears as a bare string or as a dict with an ``id``
+    key — is mapped to that provider's stored original ``baseUrl``.
+
+    Skipped:
+    - wildcard ids (``"*"``) — no upstream can be resolved for an unknown set
+    - providers without a stored ``_headroom_original_baseUrl`` (e.g. those
+      without a ``baseUrl`` to rewrite)
+    - non-dict provider entries
+    - empty or missing ``providers`` mapping
+
+    Returns an empty dict when nothing maps; callers use that signal to skip
+    writing the on-disk mapping file.
+    """
+    mapping: dict[str, str] = {}
+    providers = models_yml_data.get("providers")
+    if not isinstance(providers, dict) or not providers:
+        return mapping
+    for provider_config in providers.values():
+        if not isinstance(provider_config, dict):
+            continue
+        original = provider_config.get("_headroom_original_baseUrl")
+        if not original:
+            continue
+        original_url = str(original)
+        models = provider_config.get("models")
+        if not isinstance(models, list):
+            continue
+        for model in models:
+            if isinstance(model, dict):
+                model_id = model.get("id")
+            elif isinstance(model, str):
+                model_id = model
+            else:
+                continue
+            if not model_id or model_id == "*":
+                continue
+            mapping[str(model_id)] = original_url
+    return mapping
+
+
+def _write_upstream_map(mapping: dict[str, str]) -> Path:
+    """Write ``mapping`` as JSON to ``.omp/.headroom-upstreams.json``.
+
+    Creates the ``.omp/`` parent directory if it does not yet exist. Keys are
+    sorted and the file is indented for human inspection. Returns the path
+    written so callers can record it in launch env or logs.
+    """
+    path = omp_upstream_map_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 # ---------------------------------------------------------------------------
