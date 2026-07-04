@@ -130,6 +130,34 @@ def strip_omp_headroom_blocks(content: str) -> str:
     return cleaned.strip()
 
 
+def _strip_omp_config_markers(path: Path) -> str:
+    """Strip Headroom-managed blocks from a project-local ``.omp/config.yml``.
+
+    Mirrors the marker-strip logic in :func:`restore_omp_models_yml` for the
+    project-local ``.omp/config.yml`` written by :func:`inject_omp_proxy_config`.
+    Exposed here (rather than only in ``headroom/cli/wrap.py``) so future
+    callers — programmatic unwrap, recovery scripts, tests — share one
+    canonical implementation.
+
+    Returns one of:
+
+    - ``"stripped"`` — markers were present and stripped; non-empty content remains.
+    - ``"removed"`` — the file contained only Headroom marker content; removed entirely.
+    - ``"noop"`` — no markers found (or the file does not exist); file unchanged.
+    """
+    if not path.exists():
+        return "noop"
+    content = path.read_text(encoding="utf-8")
+    if _CONFIG_MARKER_START not in content:
+        return "noop"
+    cleaned = strip_omp_headroom_blocks(content)
+    if cleaned.strip():
+        path.write_text(cleaned + "\n", encoding="utf-8")
+        return "stripped"
+    path.unlink()
+    return "removed"
+
+
 # ---------------------------------------------------------------------------
 # Inject — modify models.yml to route providers through Headroom proxy
 # ---------------------------------------------------------------------------
@@ -317,6 +345,20 @@ def _write_upstream_map(mapping: dict[str, str]) -> Path:
     return path
 
 
+def _remove_upstream_map() -> None:
+    """Delete ``.omp/.headroom-upstreams.json`` if present.
+
+    Used by :func:`restore_omp_models_yml` so a stale upstream map does not
+    outlive the wrap. Silent on missing file (``FileNotFoundError``) — an
+    absent map is the expected state for a never-wrapped or already-cleaned
+    project, and must not surface as an error during unwrap.
+    """
+    try:
+        omp_upstream_map_path().unlink()
+    except FileNotFoundError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Restore — undo the effects of inject_omp_proxy_config
 # ---------------------------------------------------------------------------
@@ -328,30 +370,67 @@ def restore_omp_models_yml() -> tuple[str, Path]:
     Returns ``(status, path)`` where status is one of:
     - ``"restored"`` — backup existed and was restored
     - ``"cleaned"`` — no backup; Headroom markers stripped from active file
+    - ``"removed"`` — no backup; active file contained only Headroom content
     - ``"noop"`` — no backup and no markers found
 
     The returned path is the live ``models.yml`` location.
+
+    Side effects:
+    - When restoring from a backup whose contents differ from the live
+      ``models.yml``, a non-blocking warning is emitted to stderr naming both
+      files and noting local edits will be overwritten. The restore still
+      proceeds.
+    - On any non-noop restore (backup restored, markers stripped, or all-marker
+      file removed) the project-local upstream mapping file
+      (``.omp/.headroom-upstreams.json``) is deleted so it does not outlive the
+      wrap. A missing mapping file is a silent no-op.
     """
     config_file, backup_file = omp_config_paths()
 
+    status: str | None = None
+
     # Strategy 1: restore from backup
     if backup_file.exists():
+        # Warn (non-blocking) when the live file diverged from the pre-wrap
+        # backup. Skip the comparison if the live file is missing — there is
+        # nothing to clobber in that case. A failed comparison (e.g. transient
+        # permission error) must not block the restore either.
+        if config_file.exists():
+            try:
+                if not filecmp.cmp(config_file, backup_file, shallow=False):
+                    click.echo(
+                        f"Warning: {config_file} differs from the pre-wrap "
+                        f"backup ({backup_file}); local edits will be "
+                        f"overwritten by the restore.",
+                        err=True,
+                    )
+            except OSError:
+                pass
         try:
             shutil.copy2(backup_file, config_file)
             backup_file.unlink()
-            return "restored", config_file
         except OSError as exc:
             raise OSError(f"could not restore OMP models.yml from backup: {exc}") from exc
-
+        status = "restored"
     # Strategy 2: strip Headroom markers from active file
-    if config_file.exists():
+    elif config_file.exists():
         content = config_file.read_text(encoding="utf-8")
         if _CONFIG_MARKER_START in content:
             cleaned = strip_omp_headroom_blocks(content)
             if cleaned.strip():
                 config_file.write_text(cleaned + "\n", encoding="utf-8")
-                return "cleaned", config_file
-            config_file.unlink()
-            return "removed", config_file
+                status = "cleaned"
+            else:
+                config_file.unlink()
+                status = "removed"
 
-    return "noop", config_file
+    if status is None:
+        # No backup and no markers: nothing was wrapped, so the filesystem must
+        # remain untouched. This includes any pre-existing upstream mapping
+        # file the user happens to have on disk.
+        return "noop", config_file
+
+    # Any actual restoration removes the upstream map so it does not outlive
+    # the wrap. A missing file is expected and silently ignored.
+    _remove_upstream_map()
+    return status, config_file
