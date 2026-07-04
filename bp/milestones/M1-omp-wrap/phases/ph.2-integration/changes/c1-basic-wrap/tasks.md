@@ -24,7 +24,7 @@
 
 ## Wave 1: Wire `headroom wrap omp`
 
-- [ ] task-1.1: [type:behavior] Implement `omp()` wrap command — binary check + MCP registration + launch
+- [x] task-1.1: [type:behavior] Implement `omp()` wrap command — binary check + MCP registration + launch <!-- commit: e6dc3622 -->
   - **description**: Replace the `raise NotImplementedError(...)` body of `omp()` in `headroom/cli/wrap.py` (lines 5626–5657) with the real implementation. Flow:
     1. `shutil.which("omp")` → if `None`, raise `click.ClickException("OMP CLI 'omp' not found in PATH. Install OMP: https://ohmy.pi")`. Use a new module-level constant `_OMP_INSTALL_URL = "https://ohmy.pi"` defined near other wrap constants (e.g. near line 163).
     2. Unless `no_mcp`: call `_setup_headroom_mcp(OmpRegistrar(), port, verbose=verbose, force=True)` to register the headroom MCP server in `.omp/mcp.json` (the registrar's `detect()` already short-circuits when `.omp/` is absent).
@@ -73,7 +73,7 @@
     AND the command exits 0
     ```
 
-- [ ] task-1.2: [type:scaffolding] Add `_OMP_INSTALL_URL` constant and import block for OMP wrap
+- [x] task-1.2: [type:scaffolding] Add `_OMP_INSTALL_URL` constant and import block for OMP wrap <!-- commit: 31cfabbe -->
   - **description**: Near the existing `_TOOL_SEARCH_ENV` / `_TOOL_SEARCH_DEFAULT` block in `headroom/cli/wrap.py` (around line 178), add `_OMP_INSTALL_URL = "https://ohmy.pi"` and a one-line comment explaining it backs the `omp`-not-found error. This is split from task-1.1 only because the lint clean-up (constants separated from implementation) makes the diff reviewer-friendly. If implementation discovers the constant must live elsewhere, the constant moves but task-1.1's binary check still references it by name.
   - **files**: `headroom/cli/wrap.py`
   - **acceptance**: Constant is module-level, type is `str`, value is `"https://ohmy.pi"`. No behavioural change on its own.
@@ -83,7 +83,7 @@
 
 ## Wave 2: Wire `headroom unwrap omp`
 
-- [ ] task-2.1: [type:behavior] Implement `unwrap_omp()` — restore models.yml + strip .omp/config.yml markers + unregister MCP + stop proxy
+- [x] task-2.1: [type:behavior] Implement `unwrap_omp()` — restore models.yml + strip .omp/config.yml markers + unregister MCP + stop proxy <!-- commit: c3811e63 -->
   - **description**: Replace the `raise NotImplementedError(...)` body of `unwrap_omp()` in `headroom/cli/wrap.py` (lines 5761–5778) with the real implementation. Flow:
     1. Print `HEADROOM UNWRAP: OMP` banner (mirror `unwrap_opencode()` lines 5693–5697 verbatim, substituting `OMP` for `OPENCODE`).
     2. `status, models_path = restore_omp_models_yml()` — handles restore-from-backup / strip-markers / remove-file / noop. Map returned status to a human line: `restored→"Restored prior {path} from pre-wrap backup."`, `cleaned→"Stripped Headroom markers from {path}."`, `removed→"Removed {path} (contained only Headroom content)."`, `noop→"Nothing to undo: {path} has no Headroom wrap markers."` (mirror `unwrap_opencode()` lines 5699–5728).
@@ -150,12 +150,12 @@
 
 ## Verification
 
-- [ ] `headroom wrap omp --help` and `headroom unwrap omp --help` render unchanged option surface
-- [ ] Manual smoke: `headroom wrap omp --prepare-only` in a temp dir with a fake `.omp/mcp.json` writes the headroom entry and exits 0
-- [ ] Manual smoke: `headroom unwrap omp` after a wrap is idempotent (second run = noop, no proxy stop)
-- [ ] Manual smoke: `shutil.which("omp")` overridden to `None` → `wrap omp` exits non-zero with "Install OMP" hint
-- [ ] No `NotImplementedError` in `omp()` or `unwrap_omp()` (search confirms)
-- [ ] Lint clean (existing wrap.py lint config passes)
-- [ ] Type check clean (`mypy`/`pyright` if configured)
-- [ ] All opencode wrap/unwrap tests still pass (`tests/test_cli/test_wrap_opencode.py`) — confirms no shared-helper regressions
-- [ ] **Test authoring for c1 is deferred to ph.3-hardening** — Wave 1 and Wave 2 RED-test descriptions above are the contract ph.3 will materialize
+- [x] `headroom wrap omp --help` and `headroom unwrap omp --help` render unchanged option surface
+- [x] Manual smoke: `headroom wrap omp --prepare-only` in a temp dir with a fake `.omp/mcp.json` writes the headroom entry and exits 0
+- [x] Manual smoke: `headroom unwrap omp` after a wrap is idempotent (second run = noop, no proxy stop)
+- [x] Manual smoke: `shutil.which("omp")` overridden to `None` → `wrap omp` exits non-zero with "Install OMP" hint
+- [x] No `NotImplementedError` in `omp()` or `unwrap_omp()` (search confirms)
+- [x] Lint clean (existing wrap.py lint config passes)
+- [x] Type check clean (`mypy`/`pyright` if configured)
+- [x] All opencode wrap/unwrap tests still pass (`tests/test_cli/test_wrap_opencode.py`) — confirms no shared-helper regressions
+- [x] **Test authoring for c1 is deferred to ph.3-hardening** — Wave 1 and Wave 2 RED-test descriptions above are the contract ph.3 will materialize
