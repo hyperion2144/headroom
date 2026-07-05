@@ -95,58 +95,43 @@ def test_unwrap_omp_noop_when_no_markers(
     assert "https://original.example.com" in models_yml.read_text()
 
 
-def test_unwrap_omp_strips_markers_when_no_backup(
+def test_unwrap_omp_strips_config_yml_markers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
 ) -> None:
-    """Unwrap strips Headroom blocks when no backup exists."""
+    """Unwrap strips Headroom markers from .omp/config.yml."""
     _set_test_home(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     from headroom.providers.omp.config import (
         _CONFIG_MARKER_END,
         _CONFIG_MARKER_START,
-        inject_omp_proxy_config,
     )
-    models_yml = tmp_path / "models.yml"
-    models_yml.write_text("providers:\n  deepseek:\n    models: [\"deepseek-v4-flash\"]\n    baseUrl: https://original.example.com\n")
-    # Inject config directly (wrap omp doesn't call inject_omp_proxy_config)
-    inject_omp_proxy_config(port=9000)
-    # Remove backup to simulate no-backup scenario
-    backup = tmp_path / "models.yml.headroom-backup"
-    if backup.exists():
-        backup.unlink()
+    config_yml = tmp_path / ".omp" / "config.yml"
+    config_yml.parent.mkdir(parents=True)
+    config_yml.write_text(
+        "some_config: true\n"
+        f"{_CONFIG_MARKER_START}\n"
+        "  headroom:\n"
+        "    proxy:\n"
+        "      enabled: true\n"
+        f"{_CONFIG_MARKER_END}\n"
+    )
     result = runner.invoke(main, ["unwrap", "omp"])
     assert result.exit_code == 0, result.output
-    content = models_yml.read_text()
+    content = config_yml.read_text()
     assert _CONFIG_MARKER_START not in content
     assert _CONFIG_MARKER_END not in content
+    assert "some_config: true" in content
 
-
-# ---------------------------------------------------------------------------
-# Edge cases — unwrap
-# ---------------------------------------------------------------------------
-
-
-def test_unwrap_omp_restores_from_backup(
+def test_unwrap_omp_config_noop_when_no_markers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
 ) -> None:
-    """Unwrap restores the pre-wrap backup."""
+    """Unwrap is noop when config.yml has no Headroom markers."""
     _set_test_home(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
-    original_content = "providers:\n  deepseek:\n    models: [\"deepseek-v4-flash\"]\n    baseUrl: https://original.example.com\n"
-    models_yml = tmp_path / "models.yml"
-    models_yml.write_text(original_content)
-    from headroom.providers.omp.config import inject_omp_proxy_config
-    inject_omp_proxy_config(port=9000)
+    config_yml = tmp_path / ".omp" / "config.yml"
+    config_yml.parent.mkdir(parents=True)
+    config_yml.write_text("some_config: true\n")
     result = runner.invoke(main, ["unwrap", "omp"])
     assert result.exit_code == 0, result.output
-    assert models_yml.read_text() == original_content
+    assert config_yml.read_text() == "some_config: true\n"
 
-
-def test_unwrap_omp_noop_when_no_backup_and_no_markers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
-) -> None:
-    """Unwrap is a safe no-op when no backup and no markers."""
-    _set_test_home(monkeypatch, tmp_path)
-    monkeypatch.chdir(tmp_path)
-    result = runner.invoke(main, ["unwrap", "omp"])
-    assert result.exit_code == 0, result.output

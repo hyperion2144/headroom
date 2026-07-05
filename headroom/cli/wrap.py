@@ -127,12 +127,7 @@ from headroom.providers.opencode.config import (
     strip_opencode_headroom_blocks,
 )
 from headroom.providers.omp import (
-    _CONFIG_MARKER_END,  # noqa: F401
-    _CONFIG_MARKER_START,  # noqa: F401
-    inject_omp_proxy_config,
-    omp_config_paths,
-    restore_omp_models_yml,
-    snapshot_omp_models_if_unwrapped,
+    _CONFIG_MARKER_START,
     strip_omp_headroom_blocks,
 )
 from headroom.providers.omp.runtime import build_launch_env as _build_omp_launch_env
@@ -5805,9 +5800,6 @@ def unwrap_opencode(port: int, no_stop_proxy: bool) -> None:
 def _strip_omp_config_markers(path: Path) -> str:
     """Strip Headroom-managed blocks from a project-local ``.omp/config.yml``.
 
-    Mirrors the marker-strip logic in :func:`restore_omp_models_yml` for the
-    project-local ``.omp/config.yml`` written by :func:`inject_omp_proxy_config`.
-
     Returns one of:
 
     - ``"stripped"`` — markers were present and stripped; non-empty content remains.
@@ -5838,30 +5830,16 @@ def unwrap_omp(port: int, no_stop_proxy: bool) -> None:
     \b
     Behaviour:
 
-    * Restore ``~/.omp/agent/models.yml`` from its pre-wrap backup when present;
-      otherwise strip Headroom marker blocks; otherwise leave the file alone.
     * Strip Headroom marker blocks from project-local ``.omp/config.yml``.
     * Remove the Headroom MCP server from ``.omp/mcp.json``.
-    * Stop the local Headroom proxy unless ``--no-stop-proxy`` (and only when
-      something was actually changed on disk).
+    * Remove the Headroom proxy extension from ``~/.omp/agent/extensions/``.
+    * Stop the local Headroom proxy unless ``--no-stop-proxy``.
     """
-    from headroom.mcp_registry import OmpRegistrar
-
-    click.echo()
     click.echo("  ╔═══════════════════════════════════════════════╗")
     click.echo("  ║         HEADROOM UNWRAP: OMP                  ║")
     click.echo("  ╚═══════════════════════════════════════════════╝")
     click.echo()
-
-    status, models_path = restore_omp_models_yml()
-    if status == "restored":
-        click.echo(f"  Restored prior {models_path} from pre-wrap backup.")
-    elif status == "cleaned":
-        click.echo(f"  Stripped Headroom markers from {models_path}.")
-    elif status == "removed":
-        click.echo(f"  Removed {models_path} (contained only Headroom content).")
-    else:
-        click.echo(f"  Nothing to undo: {models_path} has no Headroom wrap markers.")
+    from headroom.mcp_registry import OmpRegistrar
 
     project_config = Path.cwd() / ".omp" / "config.yml"
     config_status = _strip_omp_config_markers(project_config)
@@ -5878,12 +5856,9 @@ def unwrap_omp(port: int, no_stop_proxy: bool) -> None:
 
     click.echo()
     click.echo("✓ OMP is no longer routed through the Headroom proxy.")
-    if status != "noop" and not no_stop_proxy:
+    if config_status not in ("noop",) and not no_stop_proxy:
         _echo_unwrap_proxy_stop_status(_stop_local_proxy_for_unwrap(port), port)
     click.echo()
-
-
-@unwrap.command("openclaw")
 @click.option(
     "--proxy-port", default=8787, type=click.IntRange(1, 65535), help="Headroom proxy port"
 )
