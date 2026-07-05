@@ -47,26 +47,38 @@ def _resolve_anthropic_upstream_base(request_headers: dict[str, str]) -> str | N
     """Resolve the upstream base URL from the ``x-headroom-base-url`` header.
 
     Mirrors ``_resolve_openai_upstream_base`` (``openai.py:113-123``): performs
-    a case-insensitive header lookup, normalizes the value to an origin URL
-    (stripping any path/query/fragment, validating scheme + hostname), then
-    narrows the allowed schemes to ``http`` / ``https`` (the OpenAI variant
+    a case-insensitive header lookup, validates the URL (scheme + hostname),
+    then narrows the allowed schemes to ``http`` / ``https`` (the OpenAI variant
     also accepts ``ws`` / ``wss``; Anthropic providers speak HTTP only).
 
+    Unlike ``_normalize_origin``, this function **preserves the path** from the
+    header value. Some upstreams (e.g. MiniMax) use a path-prefixed endpoint
+    like ``https://api.minimaxi.com/anthropic`` where the path is significant.
+
     Returns:
-        Normalized origin URL (e.g. ``"https://api.minimaxi.com"``), or
-        ``None`` when the header is absent, empty, malformed, or uses a
+        Normalized URL with path preserved (e.g. ``"https://api.minimaxi.com/anthropic"``),
+        or ``None`` when the header is absent, empty, malformed, or uses a
         non-HTTP scheme.
     """
     raw_base_url = _header_get(request_headers, _ANTHROPIC_BASE_URL_HEADER)
     if raw_base_url is None:
         return None
 
-    normalized = _normalize_origin(raw_base_url)
-    if normalized is None:
+    parsed = urlparse(raw_base_url.strip())
+    if not parsed.scheme or not parsed.hostname:
         return None
-    if urlparse(normalized).scheme not in {"http", "https"}:
+    if parsed.scheme.lower() not in {"http", "https"}:
         return None
-    return normalized
+
+    # Preserve the full URL including path (e.g. /anthropic suffix).
+    # Build from components to normalize casing and strip fragments/query.
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname.lower()
+    port = parsed.port
+    default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    port_part = "" if port is None or default_port else f":{port}"
+    path = parsed.path.rstrip("/") if parsed.path else ""
+    return f"{scheme}://{hostname}{port_part}{path}"
 
 
 class AnthropicHandlerMixin:

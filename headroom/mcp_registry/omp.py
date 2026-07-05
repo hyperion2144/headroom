@@ -119,7 +119,9 @@ class OmpRegistrar(MCPRegistrar):
     def get_server(self, server_name: str) -> ServerSpec | None:
         """Return the registered ``ServerSpec`` for ``server_name``, or None."""
         data = _read_json(self._config_path)
-        servers = data.get("mcpServers") or {}
+        servers = data.get("mcpServers")
+        if not isinstance(servers, dict):
+            return None
         entry = servers.get(server_name)
         if not entry or not isinstance(entry, dict):
             return None

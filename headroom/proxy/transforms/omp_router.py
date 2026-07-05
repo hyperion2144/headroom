@@ -96,12 +96,15 @@ class OmpUpstreamRouterTransform:
         return dict(self._mapping)
 
     async def __call__(self, request: Request, call_next: Any) -> Response:
-        """Inject ``x-headroom-base-url`` when the request's model is mapped.
+        """Inject ``x-headroom-base-url`` when the request's API key is mapped.
+
+        Looks up the upstream by the ``Authorization`` header (``Bearer <apiKey>``)
+        instead of the request body's ``model`` field. This avoids routing
+        ambiguity when the same model name exists across multiple providers.
 
         Behavior is documented in the class docstring; in short: this is a
         zero-overhead passthrough unless the mapping has entries AND the
-        request body is a JSON object AND its ``model`` field matches one of
-        those entries.
+        request's ``Authorization`` header matches one of those entries.
         """
         # Short-circuit: empty mapping → zero-overhead passthrough. No body
         # read, no JSON parse, no header injection. Non-OMP requests and
@@ -109,30 +112,20 @@ class OmpUpstreamRouterTransform:
         if not self._mapping:
             return await call_next(request)
 
-        # Starlette caches `await request.body()` in `request._body`, so the
-        # downstream handler can re-read it without us rewiring `_receive`.
-        try:
-            body_bytes = await request.body()
-        except Exception:
-            # Body read failure (client disconnected, etc.) — let downstream
-            # surface the error rather than masking it.
+        # Extract API key from Authorization header.
+        # Format: "Bearer <apiKey>" or bare "<apiKey>"
+        auth = request.headers.get("Authorization") or request.headers.get("authorization")
+        if not auth:
             return await call_next(request)
 
-        # Parse JSON. Malformed JSON → safe passthrough; the handler will
-        # return its own 400 if the body is genuinely invalid.
-        try:
-            parsed = json.loads(body_bytes) if body_bytes else None
-        except (json.JSONDecodeError, ValueError):
-            return await call_next(request)
+        # Strip "Bearer " prefix if present
+        api_key = auth
+        if api_key.startswith("Bearer "):
+            api_key = api_key[7:]
+        elif api_key.startswith("bearer "):
+            api_key = api_key[7:]
 
-        if not isinstance(parsed, dict):
-            return await call_next(request)
-
-        model = parsed.get("model")
-        if not isinstance(model, str) or not model:
-            return await call_next(request)
-
-        upstream = self._mapping.get(model)
+        upstream = self._mapping.get(api_key)
         if upstream is None:
             return await call_next(request)
 
@@ -146,8 +139,7 @@ class OmpUpstreamRouterTransform:
         request.scope["headers"] = existing
 
         logger.debug(
-            "omp_router_injected model=%s upstream=%s",
-            model,
+            "omp_router_injected upstream=%s",
             upstream,
         )
 

@@ -3445,6 +3445,7 @@ def wrap() -> None:
         headroom wrap openhands           # OpenHands CLI
         headroom wrap openclaw            # OpenClaw plugin bootstrap
         headroom wrap opencode            # OpenCode CLI
+        headroom wrap omp                 # OMP (Oh My Pi)
 
     \b
     `wrap` vs `proxy`:
@@ -5657,10 +5658,18 @@ def omp(
             f"OMP CLI 'omp' not found in PATH. Install OMP: {_OMP_INSTALL_URL}"
         )
 
+    from headroom.providers.omp.config import inject_omp_proxy_config
+    inject_omp_proxy_config(port)
+
     if not no_mcp:
         _setup_headroom_mcp(OmpRegistrar(), port, verbose=verbose, force=True)
-
     env, env_vars_display = build_launch_env(port, os.environ)
+    from headroom.providers.omp.config import omp_upstream_map_path
+    upstream_map = omp_upstream_map_path()
+    if upstream_map.exists():
+        os.environ["HEADROOM_OMP_UPSTREAM_MAP"] = str(upstream_map)
+        env["HEADROOM_OMP_UPSTREAM_MAP"] = str(upstream_map)
+        env_vars_display = list(env_vars_display) + [f"HEADROOM_OMP_UPSTREAM_MAP={upstream_map}"]
 
     if prepare_only:
         click.echo("  OMP preparation complete (proxy not started, omp not launched).")

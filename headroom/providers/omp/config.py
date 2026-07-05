@@ -287,16 +287,26 @@ def inject_omp_proxy_config(port: int) -> None:
 
 
 def _build_upstream_map(models_yml_data: dict) -> dict[str, str]:
-    """Build ``{model_id: original_baseUrl}`` from parsed ``models.yml`` data.
+    """Build ``{apiKey: original_baseUrl}`` from parsed ``models.yml`` data.
+
+    Uses the provider's resolved ``apiKey`` as the key so the proxy can route
+    by ``Authorization`` header, avoiding model-name collisions across providers.
+
+    If the ``apiKey`` value looks like an environment variable reference
+    (e.g. ``MINIMAX_API_KEY``), it is resolved via ``os.environ.get()`` so
+    the mapping key matches the actual API key sent in requests.
+
+    Also discovers built-in providers from OMP's ``models.db`` and their API
+    keys from ``agent.db``, so providers that the user has logged in to via
+    ``omp login`` are automatically included in the mapping.
 
     Iterates ``data["providers"]``; for each provider that is a dict and carries
     a truthy ``_headroom_original_baseUrl`` (i.e. was touched by
-    ``_modify_provider_base_urls``), walks the provider's ``models`` list. Each
-    model id — whether it appears as a bare string or as a dict with an ``id``
-    key — is mapped to that provider's stored original ``baseUrl``.
+    ``_modify_provider_base_urls``), maps the provider's resolved ``apiKey``
+    to its stored original ``baseUrl``.
 
     Skipped:
-    - wildcard ids (``"*"``) — no upstream can be resolved for an unknown set
+    - providers without an ``apiKey``
     - providers without a stored ``_headroom_original_baseUrl`` (e.g. those
       without a ``baseUrl`` to rewrite)
     - non-dict provider entries
@@ -307,28 +317,25 @@ def _build_upstream_map(models_yml_data: dict) -> dict[str, str]:
     """
     mapping: dict[str, str] = {}
     providers = models_yml_data.get("providers")
-    if not isinstance(providers, dict) or not providers:
-        return mapping
-    for provider_config in providers.values():
-        if not isinstance(provider_config, dict):
-            continue
-        original = provider_config.get("_headroom_original_baseUrl")
-        if not original:
-            continue
-        original_url = str(original)
-        models = provider_config.get("models")
-        if not isinstance(models, list):
-            continue
-        for model in models:
-            if isinstance(model, dict):
-                model_id = model.get("id")
-            elif isinstance(model, str):
-                model_id = model
-            else:
+    if isinstance(providers, dict) and providers:
+        for provider_config in providers.values():
+            if not isinstance(provider_config, dict):
                 continue
-            if not model_id or model_id == "*":
+            original = provider_config.get("_headroom_original_baseUrl")
+            if not original:
                 continue
-            mapping[str(model_id)] = original_url
+            api_key = provider_config.get("apiKey")
+            if not api_key or not isinstance(api_key, str):
+                continue
+            # Resolve env var reference
+            resolved = os.environ.get(api_key)
+            if resolved:
+                api_key = resolved
+            mapping[api_key] = str(original)
+
+    # Discover built-in providers from OMP's models.db and agent.db
+    _discover_builtin_providers(mapping)
+
     return mapping
 
 
@@ -341,9 +348,88 @@ def _write_upstream_map(mapping: dict[str, str]) -> Path:
     """
     path = omp_upstream_map_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(mapping, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     return path
 
+
+def _discover_builtin_providers(mapping: dict[str, str]) -> None:
+    """Discover built-in OMP providers and add their API key → upstream mappings.
+
+    Reads ``~/.omp/agent/models.db`` for authoritative built-in providers and
+    ``~/.omp/agent/agent.db`` for their API keys. Falls back to environment
+    variables (``{PROVIDER_ID}_API_KEY``) when no credential is found in the
+    database. Adds entries to ``mapping`` in-place.
+    """
+    try:
+        import sqlite3
+    except ImportError:
+        return
+
+    agent_dir = omp_home_dir()
+    models_db = agent_dir / "models.db"
+    agent_db = agent_dir / "agent.db"
+
+    if not models_db.exists() or not agent_db.exists():
+        return
+
+    try:
+        # Read built-in providers from models.db
+        conn = sqlite3.connect(str(models_db))
+        cur = conn.execute(
+            "SELECT provider_id, models FROM model_cache WHERE authoritative = 1"
+        )
+        builtin_providers: dict[str, str] = {}
+        for provider_id, models_json in cur:
+            try:
+                models = json.loads(models_json)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not models or not isinstance(models, list):
+                continue
+            # Use the first model's baseUrl as the provider's upstream
+            first = models[0]
+            if not isinstance(first, dict):
+                continue
+            base_url = first.get("baseUrl")
+            if base_url and isinstance(base_url, str):
+                builtin_providers[provider_id] = base_url
+        conn.close()
+
+        # Read API keys from agent.db
+        conn = sqlite3.connect(str(agent_db))
+        cur = conn.execute(
+            "SELECT provider, data FROM auth_credentials WHERE credential_type = 'api_key'"
+        )
+        for provider_id, data_json in cur:
+            if provider_id not in builtin_providers:
+                continue
+            try:
+                data = json.loads(data_json)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            api_key = data.get("key") if isinstance(data, dict) else None
+            if not api_key or not isinstance(api_key, str):
+                continue
+            upstream = builtin_providers[provider_id]
+            if api_key not in mapping:
+                mapping[api_key] = upstream
+        conn.close()
+
+        # Fall back to environment variables for providers not in agent.db.
+        # Convention: {PROVIDER_ID}_API_KEY (uppercase, e.g. DEEPSEEK_API_KEY).
+        for provider_id, upstream in builtin_providers.items():
+            if any(v == upstream for v in mapping.values()):
+                continue  # already mapped via agent.db
+            env_key = f"{provider_id.upper()}_API_KEY"
+            api_key = os.environ.get(env_key)
+            if api_key and isinstance(api_key, str) and api_key not in mapping:
+                mapping[api_key] = upstream
+    except Exception:
+        # Non-fatal: if we can't read the DBs, just use models.yml data
+        pass
 
 def _remove_upstream_map() -> None:
     """Delete ``.omp/.headroom-upstreams.json`` if present.
