@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 
 def _omp_mcp_config_path() -> Path:
-    """Return the project-local OMP MCP config path."""
-    return Path.cwd() / ".omp" / "mcp.json"
+    """Return the global OMP MCP config path under agent home."""
+    return Path.home() / ".omp" / "agent" / "mcp.json"
 
 
 def _read_json(path: Path) -> dict[str, Any]:

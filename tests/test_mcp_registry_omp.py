@@ -47,10 +47,9 @@ def test_detect_when_omp_dir_present(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert registrar.detect() is True
 
 
-def test_detect_when_nothing_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Detection fails when .omp directory does not exist."""
-    monkeypatch.chdir(tmp_path)
-    registrar = OmpRegistrar()
+def test_detect_when_config_path_missing() -> None:
+    """Detection fails when the config path's parent directory does not exist."""
+    registrar = OmpRegistrar(config_path=Path("/tmp") / ".omp-nonexistent" / "mcp.json")
     assert registrar.detect() is False
 
 

@@ -5658,18 +5658,12 @@ def omp(
             f"OMP CLI 'omp' not found in PATH. Install OMP: {_OMP_INSTALL_URL}"
         )
 
-    from headroom.providers.omp.config import inject_omp_proxy_config
-    inject_omp_proxy_config(port)
+    # Install the Headroom proxy extension globally
+    _install_omp_extension()
 
     if not no_mcp:
         _setup_headroom_mcp(OmpRegistrar(), port, verbose=verbose, force=True)
     env, env_vars_display = build_launch_env(port, os.environ)
-    from headroom.providers.omp.config import omp_upstream_map_path
-    upstream_map = omp_upstream_map_path()
-    if upstream_map.exists():
-        os.environ["HEADROOM_OMP_UPSTREAM_MAP"] = str(upstream_map)
-        env["HEADROOM_OMP_UPSTREAM_MAP"] = str(upstream_map)
-        env_vars_display = list(env_vars_display) + [f"HEADROOM_OMP_UPSTREAM_MAP={upstream_map}"]
 
     if prepare_only:
         click.echo("  OMP preparation complete (proxy not started, omp not launched).")
@@ -5685,6 +5679,31 @@ def omp(
         env_vars_display=env_vars_display,
         agent_type="omp",
     )
+
+
+def _install_omp_extension() -> None:
+    """Install the Headroom proxy extension for OMP.
+
+    Copies ``plugins/omp/headroom-proxy.ts`` to ``~/.omp/agent/extensions/``
+    so OMP loads it automatically at startup.
+    """
+    import shutil as _shutil
+    src = Path(__file__).parent.parent.parent / "plugins" / "omp" / "headroom-proxy.ts"
+    dst = Path.home() / ".omp" / "agent" / "extensions" / "headroom-proxy.ts"
+    if not src.exists():
+        click.echo("  Warning: headroom-proxy.ts extension not found; skipping install.")
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    _shutil.copy2(str(src), str(dst))
+    click.echo(f"  Installed Headroom proxy extension: {dst}")
+
+
+def _remove_omp_extension() -> None:
+    """Remove the Headroom proxy extension for OMP."""
+    dst = Path.home() / ".omp" / "agent" / "extensions" / "headroom-proxy.ts"
+    if dst.exists():
+        dst.unlink()
+        click.echo(f"  Removed Headroom proxy extension: {dst}")
 
 
 def _opencode_home_dir() -> Path:
@@ -5855,6 +5874,7 @@ def unwrap_omp(port: int, no_stop_proxy: bool) -> None:
     if omp_registrar.detect():
         if omp_registrar.unregister_server("headroom"):
             click.echo("  Removed Headroom MCP server from OMP.")
+    _remove_omp_extension()
 
     click.echo()
     click.echo("✓ OMP is no longer routed through the Headroom proxy.")

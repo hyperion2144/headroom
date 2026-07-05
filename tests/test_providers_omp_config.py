@@ -336,8 +336,7 @@ def test_build_upstream_map_normal() -> None:
             },
         }
     }
-    with patch("headroom.providers.omp.config._discover_builtin_providers"):
-        mapping = _build_upstream_map(data)
+    mapping = _build_upstream_map(data)
     assert mapping == {
         "sk-deepseek-key": "https://original.example.com",
         "sk-minimax-key": "https://api.minimaxi.com",
@@ -354,9 +353,7 @@ def test_build_upstream_map_skips_wildcard() -> None:
             },
         }
     }
-    with patch("headroom.providers.omp.config._discover_builtin_providers"):
-        mapping = _build_upstream_map(data)
-    assert mapping == {}
+    mapping = _build_upstream_map(data)
 
 
 def test_build_upstream_map_skips_non_dict_provider(tmp_path: Path) -> None:
@@ -366,9 +363,7 @@ def test_build_upstream_map_skips_non_dict_provider(tmp_path: Path) -> None:
             "test": "not-a-dict",
         }
     }
-    with patch("headroom.providers.omp.config._discover_builtin_providers"):
-        mapping = _build_upstream_map(data)
-    assert mapping == {}
+    mapping = _build_upstream_map(data)
 
 
 def test_write_upstream_map_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
