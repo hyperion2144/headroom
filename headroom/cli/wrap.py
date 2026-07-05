@@ -5859,6 +5859,7 @@ def unwrap_omp(port: int, no_stop_proxy: bool) -> None:
     if config_status not in ("noop",) and not no_stop_proxy:
         _echo_unwrap_proxy_stop_status(_stop_local_proxy_for_unwrap(port), port)
     click.echo()
+@unwrap.command("openclaw")
 @click.option(
     "--proxy-port", default=8787, type=click.IntRange(1, 65535), help="Headroom proxy port"
 )
