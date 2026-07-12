@@ -2,36 +2,96 @@
  * Headroom Proxy Extension for OMP
  *
  * Intercepts LLM API requests by monkey-patching globalThis.fetch.
- * Rewrites the request to the correct proxy handler path so streaming works,
- * and sets the x-headroom-base-url / x-headroom-original-path headers
- * so the proxy can reconstruct the full upstream URL.
+ * Auto-discovers provider hosts from OMP's models.yml and models.db
+ * so ALL providers (configured + built-in) are routed through the proxy.
  */
-
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+
+const PROXY_URL = process.env.HEADROOM_PROXY_URL || `http://127.0.0.1:${parseInt(process.env.HEADROOM_PROXY_PORT ?? "8787", 10)}`;
+
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || process.env.OMP_CODING_AGENT_DIR || join(homedir(), ".omp", "agent");
+const MODELS_YML = join(AGENT_DIR, "models.yml");
+const MODELS_DB = join(AGENT_DIR, "models.db");
 
 const PORT = parseInt(process.env.HEADROOM_PROXY_PORT ?? "8787", 10);
-const PROXY_ORIGIN = `http://127.0.0.1:${PORT}`;
+const PROXY_URL = `http://127.0.0.1:${PORT}`;
 
-// Known provider hosts to route through the proxy.
-const PROVIDER_HOST_SUFFIXES = [
-  "anthropic.com",
-  "openai.com",
-  "minimaxi.com",
-  "volces.com",
-  "aliyuncs.com",
-  "siliconflow.cn",
-  "deepseek.com",
-  "googleapis.com",
-  "aiplatform.googleapis.com",
-  "groq.com",
-  "together.xyz",
-  "cerebras.net",
-  "mistral.ai",
-  "cohere.ai",
-  "perplexity.ai",
-];
+/** Extract all provider hosts from models.yml (configured providers). */
+function parseHostsFromYml(): string[] {
+  try {
+    const raw = readFileSync(MODELS_YML, "utf-8");
+    const hosts: string[] = [];
+    // Naive YAML parsing: find baseUrl lines and extract hostname
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("baseUrl:")) continue;
+      const urlStr = trimmed.slice(8).trim().replace(/['"]/g, "");
+      try {
+        const host = new URL(urlStr).hostname;
+        if (host && host !== "127.0.0.1" && host !== "localhost") hosts.push(host);
+      } catch { /* skip malformed */ }
+    }
+    return hosts;
+  } catch {
+    return [];
+  }
+}
+
+/** Extract all provider hosts from models.db (built-in + configured providers). */
+function parseHostsFromDb(): string[] {
+  try {
+    if (!existsSync(MODELS_DB)) return [];
+    // bun:sqlite is available because OMP runs on Bun
+    const { Database } = require("bun:sqlite") as unknown as {
+      Database: new (path: string) => {
+        query: (sql: string) => {
+          all: () => Array<Record<string, unknown>>;
+        };
+      };
+    };
+    const db = new Database(MODELS_DB);
+    const hosts: string[] = [];
+    // model_cache table stores models as JSON in the `models` column
+    const rows = db.query("SELECT models FROM model_cache").all() as Array<{ models: string }>;
+    for (const row of rows) {
+      try {
+        const models = JSON.parse(row.models);
+        if (!Array.isArray(models)) continue;
+        for (const model of models) {
+          const url = model?.baseUrl;
+          if (typeof url !== "string" || !url) continue;
+          try {
+            const host = new URL(url).hostname;
+            if (host && host !== "127.0.0.1" && host !== "localhost") hosts.push(host);
+          } catch { /* skip malformed url */ }
+        }
+      } catch { /* skip bad json */ }
+    }
+    db.close();
+    return hosts;
+  } catch {
+    return [];
+  }
+}
+
+/** Build the provider host suffix list from all sources. */
+function buildProviderHosts(): string[] {
+  const hosts = new Set<string>();
+  for (const h of parseHostsFromYml()) hosts.add(h);
+  for (const h of parseHostsFromDb()) hosts.add(h);
+  return [...hosts].filter(Boolean);
+}
 
 export default function headroomProxy(_pi: ExtensionAPI) {
+  const providerHosts = buildProviderHosts();
+
+  // Log discovered hosts so we can debug if something is missing
+  // (log to stderr, which OMP captures)
+  console.error(`[HEADROOM-EXT] Discovered ${providerHosts.length} provider hosts: ${providerHosts.join(", ")}`);
+
   const originalFetch = globalThis.fetch.bind(globalThis);
 
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -51,10 +111,8 @@ export default function headroomProxy(_pi: ExtensionAPI) {
       return originalFetch(input, init);
     }
 
-    // Only intercept known provider hosts
-    const isProviderHost = PROVIDER_HOST_SUFFIXES.some(suffix =>
-      url.hostname.endsWith(suffix)
-    );
+    // Check against discovered provider hosts
+    const isProviderHost = providerHosts.some(host => url.hostname === host || url.hostname.endsWith("." + host));
     if (!isProviderHost) {
       return originalFetch(input, init);
     }
@@ -70,14 +128,10 @@ export default function headroomProxy(_pi: ExtensionAPI) {
     let headroomBaseUrl: string;
 
     if (isAnthropicFormat) {
-      // Route to Anthropic handler (/v1/messages).
-      // x-headroom-base-url preserves the path prefix (e.g. /anthropic).
       proxyPath = "/v1/messages";
       const messagesIdx = path.indexOf("/v1/messages");
       headroomBaseUrl = url.origin + (messagesIdx > 0 ? path.slice(0, messagesIdx) : "");
     } else if (isOpenAIFormat) {
-      // Route to OpenAI handler (/v1/chat/completions).
-      // x-headroom-original-path preserves the full path for reconstruction.
       proxyPath = "/v1/chat/completions";
       headroomBaseUrl = url.origin;
     } else {
@@ -85,7 +139,7 @@ export default function headroomProxy(_pi: ExtensionAPI) {
       headroomBaseUrl = url.origin;
     }
 
-    const proxyUrl = `${PROXY_ORIGIN}${proxyPath}${url.search}`;
+    const proxyUrl = `${PROXY_URL}${proxyPath}${url.search}`;
     const origHeaders = new Headers(init?.headers || {});
     origHeaders.set("x-headroom-base-url", headroomBaseUrl);
 
