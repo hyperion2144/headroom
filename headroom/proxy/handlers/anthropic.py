@@ -2244,6 +2244,7 @@ class AnthropicHandlerMixin:
             # direct API and leave those paths untouched.
             if (
                 provider_name == "anthropic"
+                and upstream_base_url is None
                 and getattr(self, "anthropic_backend", None) is None
                 and os.environ.get("HEADROOM_TOOL_SEARCH", "").strip().lower()
                 in ("1", "true", "yes", "on", "auto")
